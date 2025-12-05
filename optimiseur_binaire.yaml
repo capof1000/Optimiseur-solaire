@@ -1,42 +1,45 @@
 blueprint:
-  name: Chauffe-eau intelligent multi-CE – HC + surplus solaire avec priorité
+  name: Chauffe-eau intelligent multi-CE – HC + surplus solaire
   description: >
-    Gère plusieurs chauffe-eau intelligemment :
+    Gère un chauffe-eau avec :
     - Pré-chauffage pendant les heures creuses selon consommation historique
-    - Gestion du surplus solaire avec priorité pour éviter les collisions
+    - Gestion du surplus solaire avec priorité
+    - Compatible avec les entités simulées
   domain: automation
   input:
 
-    # Switch du CE
+    # Switch du CE (simulé)
     ce_switch:
       name: Switch du chauffe-eau
       selector:
         entity:
-          domain: switch
+          domain: input_boolean
+      default: input_boolean.ce1_switch
 
-    # Capteur d'énergie du CE (historique)
+    # Capteur d'énergie du CE (historique, simulé)
     ce_energy_sensor:
       name: Capteur d'énergie du CE (kWh)
       description: Capteur historique pour estimer consommation
       selector:
         entity:
-          domain: sensor
+          domain: input_number
+      default: input_number.ce1_energy
 
-    # Capteur de surplus solaire
+    # Capteur de surplus solaire (simulé)
     surplus_sensor:
       name: Capteur de surplus PV (W)
       selector:
         entity:
-          domain: sensor
+          domain: input_number
+      default: input_number.surplus_ce1
 
-    # Capteur de prévision solaire
+    # Capteur de prévision solaire (simulé)
     forecast_sensor:
       name: Capteur de prévision solaire (kWh)
-      description: Prévision pour aujourd'hui (optionnel)
-      default: sensor.energy_production_today
       selector:
         entity:
-          domain: sensor
+          domain: input_number
+      default: input_number.solar_ce1
 
     forecast_min:
       name: Seuil minimum de prévision solaire (kWh)
@@ -51,7 +54,6 @@ blueprint:
     # Paramètres de calcul
     ce_power:
       name: Puissance nominale du CE (kW)
-      description: Utilisée si pas de capteur historique
       default: 2
       selector:
         number:
@@ -100,7 +102,6 @@ blueprint:
     # Priorité pendant surplus solaire
     priority:
       name: Priorité CE (production solaire uniquement)
-      description: Plus le nombre est bas, plus le CE a priorité haute
       default: 1
       selector:
         number:
@@ -132,13 +133,14 @@ variables:
   hc_end_time: !input hc_end_time
   history_days: !input history_days
   priority: !input priority
+  forecast_sensor: !input forecast_sensor
+  forecast_min: !input forecast_min
 
 action:
-
   # 1️⃣ Calcul consommation moyenne et durée préchauffage HC
   - variables:
-      total_energy: "{{ states(ce_energy_sensor)|float }}"
-      avg_daily_energy: "{{ total_energy / history_days | float }}"
+      total_energy: "{{ states(ce_energy_sensor)|float(0) }}"
+      avg_daily_energy: "{{ (total_energy / history_days) | float }}"
       preheat_duration: "{{ ((avg_daily_energy) / ce_power * 60) | round(0) }}"
       hc_end_hour: "{{ hc_end_time.split(':')[0] | int }}"
       hc_end_minute: "{{ hc_end_time.split(':')[1] | int }}"
@@ -147,7 +149,7 @@ action:
       preheat_start_hour: "{{ (preheat_start_min // 60) | int }}"
       preheat_start_minute: "{{ (preheat_start_min % 60) | int }}"
 
-  # 2️⃣ Pré-chauffage HC (tous les CE déclenchent indépendamment)
+  # 2️⃣ Pré-chauffage HC
   - choose:
       - conditions:
           - condition: template
@@ -172,7 +174,7 @@ action:
             above: !input min_duration
         sequence:
           - variables:
-              surplus_available: "{{ states(surplus_sensor) | float }}"
+              surplus_available: "{{ states('!input surplus_sensor') | float(0) }}"
           - choose:
               - conditions: "{{ surplus_available >= ce_power }}"
                 sequence:
