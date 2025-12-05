@@ -3,6 +3,12 @@ Controle un appareil electrique en fonction de votre suproduction electrique
 ## Introduction
 
 Ce blueprint permet d'optimiser votre consomation d'energie.
+Estime l’énergie nécessaire pour la journée à partir de l’historique des derniers jours
+Calcule automatiquement la durée de préchauffage
+Détermine l’heure de démarrage pour finir à l’heure de fin paramétrable (heures creuses)
+Priorise le surplus solaire avant les heures creuses
+Inclut anti-cyclage et hystérésis
+Tous les paramètres sont configurables depuis l’UI
 
 ## Changelog
 
