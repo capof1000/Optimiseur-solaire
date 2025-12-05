@@ -1,14 +1,10 @@
 blueprint:
-  name: Chauffe-eau intelligent multi-CE – HC + surplus solaire
-  description: >
-    Gère un chauffe-eau avec :
-    - Pré-chauffage pendant les heures creuses selon consommation historique
-    - Gestion du surplus solaire avec priorité
-    - Compatible avec les entités simulées
+  name: Chauffe-eau intelligent – CE simulés
+  description: Gère un chauffe-eau avec préchauffage HC, surplus solaire et extinction automatique
   domain: automation
   input:
 
-    # Switch du CE (simulé)
+    # Switch du CE simulé
     ce_switch:
       name: Switch du chauffe-eau
       selector:
@@ -16,16 +12,15 @@ blueprint:
           domain: input_boolean
       default: input_boolean.ce1_switch
 
-    # Capteur d'énergie du CE (historique, simulé)
+    # Capteur d'énergie du CE simulé
     ce_energy_sensor:
       name: Capteur d'énergie du CE (kWh)
-      description: Capteur historique pour estimer consommation
       selector:
         entity:
           domain: input_number
       default: input_number.ce1_energy
 
-    # Capteur de surplus solaire (simulé)
+    # Capteur de surplus solaire simulé
     surplus_sensor:
       name: Capteur de surplus PV (W)
       selector:
@@ -33,7 +28,7 @@ blueprint:
           domain: input_number
       default: input_number.surplus_ce1
 
-    # Capteur de prévision solaire (simulé)
+    # Capteur de prévision solaire simulé
     forecast_sensor:
       name: Capteur de prévision solaire (kWh)
       selector:
@@ -51,7 +46,6 @@ blueprint:
           step: 0.1
           unit_of_measurement: kWh
 
-    # Paramètres de calcul
     ce_power:
       name: Puissance nominale du CE (kW)
       default: 2
@@ -89,7 +83,6 @@ blueprint:
       selector:
         time: {}
 
-    # Historique pour calcul consommation
     history_days:
       name: Nombre de jours pour calcul historique
       default: 7
@@ -99,7 +92,6 @@ blueprint:
           max: 30
           step: 1
 
-    # Priorité pendant surplus solaire
     priority:
       name: Priorité CE (production solaire uniquement)
       default: 1
@@ -113,13 +105,10 @@ mode: restart
 max_exceeded: silent
 
 trigger:
-  # Recalcul quotidien
   - platform: time
     at: "00:00:00"
-  # Changement du surplus PV
   - platform: state
     entity_id: !input surplus_sensor
-  # Fin des heures creuses
   - platform: time
     at: !input hc_end_time
 
@@ -139,61 +128,4 @@ variables:
 action:
   # 1️⃣ Calcul consommation moyenne et durée préchauffage HC
   - variables:
-      total_energy: "{{ states(ce_energy_sensor)|float(0) }}"
-      avg_daily_energy: "{{ (total_energy / history_days) | float }}"
-      preheat_duration: "{{ ((avg_daily_energy) / ce_power * 60) | round(0) }}"
-      hc_end_hour: "{{ hc_end_time.split(':')[0] | int }}"
-      hc_end_minute: "{{ hc_end_time.split(':')[1] | int }}"
-      hc_end_total_min: "{{ hc_end_hour * 60 + hc_end_minute }}"
-      preheat_start_min: "{{ hc_end_total_min - preheat_duration }}"
-      preheat_start_hour: "{{ (preheat_start_min // 60) | int }}"
-      preheat_start_minute: "{{ (preheat_start_min % 60) | int }}"
-
-  # 2️⃣ Pré-chauffage HC
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ preheat_duration > 0 }}"
-        sequence:
-          - delay_until:
-              datetime: "{{ now().replace(hour=preheat_start_hour,minute=preheat_start_minute,second=0) }}"
-          - service: switch.turn_on
-            target:
-              entity_id: !input ce_switch
-          - delay:
-              minutes: "{{ preheat_duration }}"
-          - service: switch.turn_off
-            target:
-              entity_id: !input ce_switch
-
-  # 3️⃣ Surplus solaire avec priorités
-  - choose:
-      - conditions:
-          - condition: numeric_state
-            entity_id: !input surplus_sensor
-            above: !input min_duration
-        sequence:
-          - variables:
-              surplus_available: "{{ states('!input surplus_sensor') | float(0) }}"
-          - choose:
-              - conditions: "{{ surplus_available >= ce_power }}"
-                sequence:
-                  - service: switch.turn_on
-                    target:
-                      entity_id: !input ce_switch
-                  - variables:
-                      surplus_available: "{{ surplus_available - ce_power }}"
-              - default:
-                  - service: switch.turn_off
-                    target:
-                      entity_id: !input ce_switch
-
-      - conditions:
-          - condition: numeric_state
-            entity_id: !input surplus_sensor
-            below: 0
-        sequence:
-          - delay: "00:{{ off_delay }}"
-          - service: switch.turn_off
-            target:
-              entity_id: !input ce_switch
+      total_energy: "{{ states(ce_energy_senso_
