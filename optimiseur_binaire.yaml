@@ -128,4 +128,61 @@ variables:
 action:
   # 1️⃣ Calcul consommation moyenne et durée préchauffage HC
   - variables:
-      total_energy: "{{ states(ce_energy_senso_
+      total_energy: "{{ states(ce_energy_sensor) | float(0) }}"
+      avg_daily_energy: "{{ (total_energy / history_days) | float }}"
+      preheat_duration: "{{ ((avg_daily_energy) / ce_power * 60) | round(0) }}"
+      hc_end_hour: "{{ hc_end_time.split(':')[0] | int }}"
+      hc_end_minute: "{{ hc_end_time.split(':')[1] | int }}"
+      hc_end_total_min: "{{ hc_end_hour * 60 + hc_end_minute }}"
+      preheat_start_min: "{{ hc_end_total_min - preheat_duration }}"
+      preheat_start_hour: "{{ (preheat_start_min // 60) | int }}"
+      preheat_start_minute: "{{ (preheat_start_min % 60) | int }}"
+
+  # 2️⃣ Pré-chauffage HC
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ preheat_duration > 0 }}"
+        sequence:
+          - delay_until:
+              datetime: "{{ now().replace(hour=preheat_start_hour,minute=preheat_start_minute,second=0) }}"
+          - service: switch.turn_on
+            target:
+              entity_id: !input ce_switch
+          - delay:
+              minutes: "{{ preheat_duration }}"
+          - service: switch.turn_off
+            target:
+              entity_id: !input ce_switch
+
+  # 3️⃣ Surplus solaire avec priorité
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            above: !input min_duration
+        sequence:
+          - variables:
+              surplus_available: "{{ states(surplus_sensor) | float(0) }}"
+          - choose:
+              - conditions: "{{ surplus_available >= ce_power }}"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input ce_switch
+                  - variables:
+                      surplus_available: "{{ surplus_available - ce_power }}"
+              - default:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: !input ce_switch
+
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            below: 0
+        sequence:
+          - delay: "00:{{ off_delay }}"
+          - service: switch.turn_off
+            target:
+              entity_id: !input ce_switch
