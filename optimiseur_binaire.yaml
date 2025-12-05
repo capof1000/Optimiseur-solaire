@@ -1,41 +1,64 @@
 blueprint:
-  name: Pilotage chauffe-eau sur surplus photovoltaïque
+  name: Chauffe-eau intelligent – préchauffage HC + surplus solaire
   description: >
-    Allume ou éteint un chauffe-eau électrique en fonction du surplus PV.
-    Le surplus est mesuré par une entité (positive = export, négative = import).
-    Le chauffe-eau est contrôlé en ON/OFF via un switch ou relais.
+    Chauffe-eau intelligent basé sur :
+    - Surplus solaire
+    - Historique des derniers jours pour estimer la consommation
+    - Pré-chauffage durant les heures creuses
   domain: automation
   input:
-    surplus_sensor:
-      name: Capteur de surplus PV
-      description: >
-        Entité représentant le surplus (W).
-        Exemple : sensor.surplus_pv ou sensor.linky_papp calculé.
-      selector:
-        entity:
-          domain: sensor
 
-    water_heater_switch:
-      name: Commutateur du chauffe-eau
+    # Capteurs et switch
+    ce_switch:
+      name: Switch du chauffe-eau
       selector:
         entity:
           domain: switch
 
-    min_surplus:
-      name: Seuil minimum de surplus pour allumer (W)
-      default: 500
+    ce_energy_sensor:
+      name: Capteur d'énergie du chauffe-eau (kWh)
+      description: Capteur historique de consommation du CE
+      selector:
+        entity:
+          domain: sensor
+
+    surplus_sensor:
+      name: Capteur de surplus PV (W)
+      selector:
+        entity:
+          domain: sensor
+
+    forecast_sensor:
+      name: Capteur de prévision solaire (kWh)
+      description: Prévision pour aujourd'hui (optionnel si on veut prédiction)
+      selector:
+        entity:
+          domain: sensor
+
+    forecast_min:
+      name: Seuil minimum de prévision solaire (kWh)
+      default: 3
       selector:
         number:
           min: 0
-          max: 5000
-          step: 50
-          unit_of_measurement: W
+          max: 20
+          step: 0.1
+          unit_of_measurement: kWh
+
+    # Paramètres calcul
+    ce_power:
+      name: Puissance nominale du CE (kW)
+      description: Valeur utilisée si pas de consommation réelle
+      default: 2
+      selector:
+        number:
+          min: 0.5
+          max: 6
+          step: 0.1
+          unit_of_measurement: kW
 
     min_duration:
-      name: Surplus minimum stable pendant (minutes)
-      description: >
-        Durée pendant laquelle le surplus doit rester au-dessus du seuil
-        avant d'allumer le chauffe-eau.
+      name: Surplus minimum stable (minutes)
       default: 3
       selector:
         number:
@@ -54,50 +77,97 @@ blueprint:
           step: 1
           unit_of_measurement: min
 
+    hc_end_time:
+      name: Heure de fin des heures creuses
+      default: "06:00"
+      selector:
+        time: {}
+
+    history_days:
+      name: Nombre de jours pour calcul historique
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+
 mode: restart
 max_exceeded: silent
 
 trigger:
+  - platform: time
+    at: "00:00:00"  # Recalcul quotidien
   - platform: state
     entity_id: !input surplus_sensor
+  - platform: time
+    at: !input hc_end_time
 
 variables:
-  surplus_entity: !input surplus_sensor
-  seuil: !input min_surplus
-
-condition: []
+  ce_energy_sensor: !input ce_energy_sensor
+  surplus_sensor: !input surplus_sensor
+  ce_switch: !input ce_switch
+  ce_power: !input ce_power
+  min_duration: !input min_duration
+  off_delay: !input off_delay
+  hc_end_time: !input hc_end_time
+  history_days: !input history_days
 
 action:
+
+  # 1️⃣ Calcul de la consommation moyenne quotidienne
+  - variables:
+      total_energy: >
+        {{ (states(ce_energy_sensor)|float) }}  # si tu veux, on peut faire average historique réel
+      avg_daily_energy: >
+        {{ total_energy / history_days | float }}
+
+      # Calcul du temps de préchauffage nécessaire (minutes)
+      preheat_duration: >
+        {{ ((avg_daily_energy) / ce_power * 60) | round(0) }}
+
+      # Heure de démarrage du préchauffage
+      hc_end_hour: "{{ hc_end_time.split(':')[0] | int }}"
+      hc_end_minute: "{{ hc_end_time.split(':')[1] | int }}"
+      hc_end_total_min: "{{ hc_end_hour * 60 + hc_end_minute }}"
+      preheat_start_min: "{{ hc_end_total_min - preheat_duration }}"
+      preheat_start_hour: "{{ (preheat_start_min // 60) | int }}"
+      preheat_start_minute: "{{ (preheat_start_min % 60) | int }}"
+
+  # 2️⃣ Planifier le préchauffage HC
   - choose:
-      # 🔹 Condition pour ALLUMER
+      - conditions:
+          - condition: template
+            value_template: "{{ preheat_duration > 0 }}"
+        sequence:
+          - delay_until:
+              # Calcul du moment exact pour démarrer le préchauffage
+              datetime: "{{ now().replace(hour=preheat_start_hour,minute=preheat_start_minute,second=0) }}"
+          - service: switch.turn_on
+            target:
+              entity_id: !input ce_switch
+          - delay:
+              minutes: "{{ preheat_duration }}"
+          - service: switch.turn_off
+            target:
+              entity_id: !input ce_switch
+
+  # 3️⃣ Gestion normale par surplus solaire (après HC)
+  - choose:
       - conditions:
           - condition: numeric_state
             entity_id: !input surplus_sensor
-            above: !input min_surplus
-          - condition: state
-            entity_id: !input water_heater_switch
-            state: "off"
-          - condition: template
-            value_template: >
-              {{ (now() - states[surplus_entity].last_changed).total_seconds() > (60 * (min_duration | int)) }}
+            above: !input min_duration
         sequence:
           - service: switch.turn_on
             target:
-              entity_id: !input water_heater_switch
-
-      # 🔹 Condition pour ÉTEINDRE
+              entity_id: !input ce_switch
       - conditions:
           - condition: numeric_state
             entity_id: !input surplus_sensor
             below: 0
-          - condition: state
-            entity_id: !input water_heater_switch
-            state: "on"
-          - condition: template
-            value_template: >
-              {{ (now() - states[surplus_entity].last_changed).total_seconds() > (60 * (off_delay | int)) }}
         sequence:
+          - delay: "00:{{ off_delay }}"
           - service: switch.turn_off
             target:
-              entity_id: !input water_heater_switch
-
+              entity_id: !input ce_switch
