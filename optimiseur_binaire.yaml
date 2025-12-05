@@ -1,0 +1,103 @@
+blueprint:
+  name: Pilotage chauffe-eau sur surplus photovoltaïque
+  description: >
+    Allume ou éteint un chauffe-eau électrique en fonction du surplus PV.
+    Le surplus est mesuré par une entité (positive = export, négative = import).
+    Le chauffe-eau est contrôlé en ON/OFF via un switch ou relais.
+  domain: automation
+  input:
+    surplus_sensor:
+      name: Capteur de surplus PV
+      description: >
+        Entité représentant le surplus (W).
+        Exemple : sensor.surplus_pv ou sensor.linky_papp calculé.
+      selector:
+        entity:
+          domain: sensor
+
+    water_heater_switch:
+      name: Commutateur du chauffe-eau
+      selector:
+        entity:
+          domain: switch
+
+    min_surplus:
+      name: Seuil minimum de surplus pour allumer (W)
+      default: 500
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 50
+          unit_of_measurement: W
+
+    min_duration:
+      name: Surplus minimum stable pendant (minutes)
+      description: >
+        Durée pendant laquelle le surplus doit rester au-dessus du seuil
+        avant d'allumer le chauffe-eau.
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          unit_of_measurement: min
+
+    off_delay:
+      name: Durée avant extinction si plus de surplus (minutes)
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          unit_of_measurement: min
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input surplus_sensor
+
+variables:
+  surplus_entity: !input surplus_sensor
+  seuil: !input min_surplus
+
+condition: []
+
+action:
+  - choose:
+      # 🔹 Condition pour ALLUMER
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            above: !input min_surplus
+          - condition: state
+            entity_id: !input water_heater_switch
+            state: "off"
+          - condition: template
+            value_template: >
+              {{ (now() - states[surplus_entity].last_changed).total_seconds() > (60 * (min_duration | int)) }}
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input water_heater_switch
+
+      # 🔹 Condition pour ÉTEINDRE
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            below: 0
+          - condition: state
+            entity_id: !input water_heater_switch
+            state: "on"
+          - condition: template
+            value_template: >
+              {{ (now() - states[surplus_entity].last_changed).total_seconds() > (60 * (off_delay | int)) }}
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: !input water_heater_switch
+
