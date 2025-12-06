@@ -2,7 +2,8 @@ blueprint:
   name: Optimisation consommation électrique (surplus)
   description: >
     Allume un équipement quand la consommation nette du foyer devient négative
-    et l'éteint lorsque la consommation nette dépasse la consommation de l'équipement.
+    (surproduction), et l'éteint lorsque la consommation nette dépasse
+    la consommation de l'équipement.
   domain: automation
   input:
     net_consumption:
@@ -18,7 +19,7 @@ blueprint:
       description: Input_boolean ou switch qui commande l’équipement
       selector:
         entity:
-          domain: 
+          domain:
             - switch
             - input_boolean
 
@@ -43,7 +44,7 @@ condition: []
 action:
   - choose:
 
-      # 🔵 SURPRODUCTION : consommation nette < 0 → ON
+      # 1) SURPRODUCTION : consommation nette < 0 → ON
       - conditions:
           - condition: numeric_state
             entity_id: !input net_consumption
@@ -53,14 +54,15 @@ action:
             target:
               entity_id: !input equipment_switch
 
-      # 🔴 CONSOMMATION NETTE > CONSO APPAREIL → OFF
+      # 2) PAS ASSEZ DE SURPLUS → OFF (consommation_nette > conso_appareil)
       - conditions:
           - condition: template
+            # IMPORTANT : utiliser !input 'name' ENTRE APOSTROPHES dans le template
             value_template: >
-              {{ states( !input net_consumption ) | float >
-                 states( !input equipment_power ) | float }}
+              {% set net = states( !input 'net_consumption' ) %}
+              {% set equip = states( !input 'equipment_power' ) %}
+              {{ (net | float(0)) > (equip | float(0)) }}
         sequence:
           - service: homeassistant.turn_off
             target:
               entity_id: !input equipment_switch
-
