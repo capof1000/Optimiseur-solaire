@@ -1,6 +1,6 @@
 blueprint:
-  name: Optimisation consommation électrique (surplus) avec hystérésis
-  description: Automation générique pour allumer/éteindre un équipement selon surplus PV, avec hystérésis et délai ON/OFF
+  name: Optimisation consommation électrique (surplus) avec hystérésis et délai OFF
+  description: Automation générique pour allumer/éteindre un équipement selon surplus PV, avec hystérésis et délai OFF basé sur la consommation
   domain: automation
 
   input:
@@ -37,40 +37,39 @@ blueprint:
           step: 10
           unit_of_measurement: "W"
 
-    delay_on:
-      name: Délai ON (secondes)
-      default: 5
-      selector:
-        number:
-          min: 0
-          max: 300
-          step: 1
-          unit_of_measurement: "s"
-
     delay_off:
       name: Délai OFF (secondes)
+      description: Temps que la consommation nette doit rester supérieure à l'équipement pour éteindre
       default: 5
       selector:
         number:
           min: 0
-          max: 300
+          max: 600
           step: 1
           unit_of_measurement: "s"
 
 mode: restart
 
 trigger:
-  - platform: state
+  # Surproduction → ON immédiat
+  - platform: numeric_state
     entity_id: !input net_consumption
-  - platform: state
-    entity_id: !input equipment_power
+    below: 0
+    id: surplus_on
+
+  # Consommation > équipement → OFF après délai paramétrable
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    above: !input equipment_power
+    for:
+      seconds: !input delay_off
+    id: excess_off
 
 variables:
   net_entity: !input net_consumption
   equip_entity: !input equipment_power
   switch_entity: !input equipment_switch
   hyst: !input hysteresis
-  delay_on_sec: !input delay_on
   delay_off_sec: !input delay_off
 
 condition: []
@@ -80,28 +79,18 @@ action:
 
       # 🔵 Allumer l'équipement si surproduction + hystérésis
       - conditions:
-          - condition: template
-            value_template: >
-              {% set net = states(net_entity) | float(0) %}
-              {% set equip = states(equip_entity) | float(0) %}
-              {{ net < -hyst }}
+          - condition: trigger
+            id: surplus_on
         sequence:
-          - delay:
-              seconds: "{{ delay_on_sec }}"
           - service: homeassistant.turn_on
             target:
               entity_id: "{{ switch_entity }}"
 
-      # 🔴 Éteindre si consommation nette dépasse puissance + hystérésis
+      # 🔴 Éteindre si consommation nette > équipement + hystérésis et délai OFF
       - conditions:
-          - condition: template
-            value_template: >
-              {% set net = states(net_entity) | float(0) %}
-              {% set equip = states(equip_entity) | float(0) %}
-              {{ net > equip + hyst }}
+          - condition: trigger
+            id: excess_off
         sequence:
-          - delay:
-              seconds: "{{ delay_off_sec }}"
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
