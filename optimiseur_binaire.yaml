@@ -1,13 +1,13 @@
 blueprint:
   name: Optimisation consommation électrique (surplus)
   description: >
-    Allume un équipement lorsque la consommation nette devient négative (surproduction),
-    et l'éteint lorsque la consommation nette dépasse la puissance de l'équipement.
+    Allume l'équipement quand la consommation nette est négative et l'éteint
+    lorsqu'elle dépasse la consommation de l'appareil.
   domain: automation
 
   input:
     net_consumption:
-      name: Consommation nette du foyer (W)
+      name: Consommation nette (W)
       selector:
         entity:
           domain: sensor
@@ -22,7 +22,7 @@ blueprint:
             - input_boolean
 
     equipment_power:
-      name: Puissance consommée par l’équipement (W)
+      name: Puissance de l'équipement (W)
       selector:
         entity:
           domain: sensor
@@ -52,12 +52,15 @@ action:
             target:
               entity_id: !input equipment_switch
 
-      # 🔴 CONSOMMATION NETTE > PUISSANCE → OFF
+      # 🔴 PAS ASSEZ DE SURPLUS → OFF
       - conditions:
           - condition: template
             value_template: >
-              {{ states(inputs.net_consumption) | float > 
-                 states(inputs.equipment_power) | float }}
+              {% set net_id = inputs.net_consumption %}
+              {% set equip_id = inputs.equipment_power %}
+              {% set net = states(net_id) | float(0) %}
+              {% set equip = states(equip_id) | float(0) %}
+              {{ net > equip }}
         sequence:
           - service: homeassistant.turn_off
             target:
