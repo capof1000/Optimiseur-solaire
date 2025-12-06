@@ -1,8 +1,6 @@
 blueprint:
   name: Optimisation consommation électrique (surplus)
-  description: >
-    Allume l'équipement quand la consommation nette est négative et l'éteint
-    lorsqu'elle dépasse la consommation de l'appareil.
+  description: Automation générique pour allumer/éteindre un équipement selon surplus PV
   domain: automation
 
   input:
@@ -22,7 +20,7 @@ blueprint:
             - input_boolean
 
     equipment_power:
-      name: Puissance de l'équipement (W)
+      name: Puissance consommée par l’équipement (W)
       selector:
         entity:
           domain: sensor
@@ -33,16 +31,20 @@ mode: restart
 trigger:
   - platform: state
     entity_id: !input net_consumption
-
   - platform: state
     entity_id: !input equipment_power
+
+variables:
+  net: "{{ states(!input net_consumption) | float(0) }}"
+  equip: "{{ states(!input equipment_power) | float(0) }}"
+  switch: !input equipment_switch
 
 condition: []
 
 action:
   - choose:
 
-      # 🔵 SURPRODUCTION → ON
+      # Allumer l'équipement si surproduction
       - conditions:
           - condition: numeric_state
             entity_id: !input net_consumption
@@ -50,18 +52,13 @@ action:
         sequence:
           - service: homeassistant.turn_on
             target:
-              entity_id: !input equipment_switch
+              entity_id: "{{ switch }}"
 
-      # 🔴 PAS ASSEZ DE SURPLUS → OFF
+      # Éteindre si la consommation nette dépasse l'équipement
       - conditions:
           - condition: template
-            value_template: >
-              {% set net_id = inputs.net_consumption %}
-              {% set equip_id = inputs.equipment_power %}
-              {% set net = states(net_id) | float(0) %}
-              {% set equip = states(equip_id) | float(0) %}
-              {{ net > equip }}
+            value_template: "{{ net > equip }}"
         sequence:
           - service: homeassistant.turn_off
             target:
-              entity_id: !input equipment_switch
+              entity_id: "{{ switch }}"
