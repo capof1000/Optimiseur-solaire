@@ -1,14 +1,13 @@
 blueprint:
   name: Optimisation consommation électrique (surplus)
   description: >
-    Allume un équipement quand la consommation nette du foyer devient négative
-    (surproduction), et l'éteint lorsque la consommation nette dépasse
-    la consommation de l'équipement.
+    Allume un équipement lorsque la consommation nette devient négative (surproduction),
+    et l'éteint lorsque la consommation nette dépasse la puissance de l'équipement.
   domain: automation
+
   input:
     net_consumption:
       name: Consommation nette du foyer (W)
-      description: Capteur indiquant la consommation nette (négatif = surplus)
       selector:
         entity:
           domain: sensor
@@ -16,7 +15,6 @@ blueprint:
 
     equipment_switch:
       name: Équipement à contrôler
-      description: Input_boolean ou switch qui commande l’équipement
       selector:
         entity:
           domain:
@@ -25,7 +23,6 @@ blueprint:
 
     equipment_power:
       name: Puissance consommée par l’équipement (W)
-      description: Capteur powercalc représentant la consommation de l'appareil
       selector:
         entity:
           domain: sensor
@@ -36,6 +33,7 @@ mode: restart
 trigger:
   - platform: state
     entity_id: !input net_consumption
+
   - platform: state
     entity_id: !input equipment_power
 
@@ -44,7 +42,7 @@ condition: []
 action:
   - choose:
 
-      # 1) SURPRODUCTION : consommation nette < 0 → ON
+      # 🔵 SURPRODUCTION → ON
       - conditions:
           - condition: numeric_state
             entity_id: !input net_consumption
@@ -54,14 +52,12 @@ action:
             target:
               entity_id: !input equipment_switch
 
-      # 2) PAS ASSEZ DE SURPLUS → OFF (consommation_nette > conso_appareil)
+      # 🔴 CONSOMMATION NETTE > PUISSANCE → OFF
       - conditions:
           - condition: template
-            # IMPORTANT : utiliser !input 'name' ENTRE APOSTROPHES dans le template
             value_template: >
-              {% set net = states( !input 'net_consumption' ) %}
-              {% set equip = states( !input 'equipment_power' ) %}
-              {{ (net | float(0)) > (equip | float(0)) }}
+              {{ states(inputs.net_consumption) | float > 
+                 states(inputs.equipment_power) | float }}
         sequence:
           - service: homeassistant.turn_off
             target:
