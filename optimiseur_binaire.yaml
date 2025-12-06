@@ -53,13 +53,14 @@ action:
             target:
               entity_id: !input equipment_switch
 
-      # 🔴 PAS ASSEZ DE SURPLUS → OFF
+      # 🔴 CONSOMMATION NETTE > CONSO APPAREIL → OFF
       - conditions:
           - condition: template
             value_template: >
-              {{ states( (input.net_consumption) | string ) | float >
-                 states( (input.equipment_power) | string ) | float }}
+              {{ states( !input net_consumption ) | float >
+                 states( !input equipment_power ) | float }}
         sequence:
           - service: homeassistant.turn_off
             target:
               entity_id: !input equipment_switch
+
