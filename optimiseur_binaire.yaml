@@ -26,9 +26,21 @@ blueprint:
           domain: sensor
           device_class: power
 
+    offset:
+      name: Offset à l'allumage (W)
+      description: Consommation nette inférieure à cette valeur pour allumer l'équipement. Si vous laissez a zero, l'appareil sera allumer des que la consommation deviendra negative. Si vous regler sur 100, l'appareil sera demarrera lorsque le surplus atteindra 100W.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: "W"
+
+
     delay_off:
       name: Délai OFF (secondes)
-      description: Temps que la consommation nette doit rester supérieure à l'équipement pour éteindre
+      description: Temps que la consommation nette doit rester supérieure avant d'éteindre l'équipement
       default: 120
       selector:
         number:
@@ -37,16 +49,6 @@ blueprint:
           step: 1
           unit_of_measurement: "s"
 
-    offset:
-      name: Offset à l'allumage (W)
-      description: Consommation nette inférieure à cette valeur pour allumer l'équipement
-      default: 0
-      selector:
-        number:
-          min: 0
-          max: 1000
-          step: 1
-          unit_of_measurement: "W"
 
 mode: restart
 
@@ -94,3 +96,4 @@ action:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
+
