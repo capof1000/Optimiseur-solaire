@@ -1,5 +1,5 @@
 blueprint:
-  name: Optimisateur d auto-consommation
+  name: Optimisateur d'auto-consommation
   description: Automation générique pour allumer/éteindre lorsquue la consommation nette deveient negative
   domain: automation
 
@@ -82,3 +82,4 @@ action:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
+
