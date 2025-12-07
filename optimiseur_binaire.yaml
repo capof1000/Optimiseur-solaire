@@ -29,7 +29,7 @@ blueprint:
     offset:
       name: Offset à l'allumage (W)
       description: Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative).Entrez, -200 pour demarrer l'appareil lorsque la surproduction atteint 200W.
-      default: 0
+      default: -50
       selector:
         number:
           min: -1000
@@ -96,4 +96,5 @@ action:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
+
 
