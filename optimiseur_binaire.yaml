@@ -1,6 +1,6 @@
 blueprint:
-  name: Optimisation consommation électrique (surplus) avec hystérésis et délai OFF
-  description: Automation générique pour allumer/éteindre un équipement selon surplus PV, avec hystérésis et délai OFF basé sur la consommation
+  name: Optimisateur d auto-consommation
+  description: Automation générique pour allumer/éteindre lorsquue la consommation nette deveient negative
   domain: automation
 
   input:
@@ -26,25 +26,14 @@ blueprint:
           domain: sensor
           device_class: power
 
-    hysteresis:
-      name: Hystérésis (W)
-      description: Marge pour éviter les allumages/extinctions trop rapides
-      default: 50
-      selector:
-        number:
-          min: 0
-          max: 500
-          step: 10
-          unit_of_measurement: "W"
-
     delay_off:
       name: Délai OFF (secondes)
       description: Temps que la consommation nette doit rester supérieure à l'équipement pour éteindre
-      default: 5
+      default: 120
       selector:
         number:
           min: 0
-          max: 600
+          max: 3600
           step: 1
           unit_of_measurement: "s"
 
@@ -69,7 +58,6 @@ variables:
   net_entity: !input net_consumption
   equip_entity: !input equipment_power
   switch_entity: !input equipment_switch
-  hyst: !input hysteresis
   delay_off_sec: !input delay_off
 
 condition: []
@@ -77,7 +65,7 @@ condition: []
 action:
   - choose:
 
-      # 🔵 Allumer l'équipement si surproduction + hystérésis
+      # 🔵 Allumer l'équipement si surproduction
       - conditions:
           - condition: trigger
             id: surplus_on
@@ -86,7 +74,7 @@ action:
             target:
               entity_id: "{{ switch_entity }}"
 
-      # 🔴 Éteindre si consommation nette > équipement + hystérésis et délai OFF
+      # 🔴 Éteindre si consommation nette > équipement et délai OFF
       - conditions:
           - condition: trigger
             id: excess_off
