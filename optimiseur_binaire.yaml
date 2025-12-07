@@ -1,6 +1,6 @@
 blueprint:
   name: Optimisateur d'auto-consommation
-  description: Automation générique pour allumer/éteindre lorsquue la consommation nette deveient negative
+  description: Automation générique pour allumer/éteindre lorsque la consommation nette devient négative avec gestion d'offset
   domain: automation
 
   input:
@@ -37,13 +37,24 @@ blueprint:
           step: 1
           unit_of_measurement: "s"
 
+    offset:
+      name: Offset à l'allumage (W)
+      description: Consommation nette inférieure à cette valeur pour allumer l'équipement
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: "W"
+
 mode: restart
 
 trigger:
-  # Surproduction → ON immédiat
+  # Surproduction → ON immédiat si consommation nette inférieure à l'offset
   - platform: numeric_state
     entity_id: !input net_consumption
-    below: 0
+    below: !input offset
     id: surplus_on
 
   # Consommation > équipement → OFF après délai paramétrable
@@ -59,13 +70,14 @@ variables:
   equip_entity: !input equipment_power
   switch_entity: !input equipment_switch
   delay_off_sec: !input delay_off
+  offset_value: !input offset
 
 condition: []
 
 action:
   - choose:
 
-      # 🔵 Allumer l'équipement si surproduction
+      # 🔵 Allumer l'équipement si surproduction et consommation nette inférieure à l'offset
       - conditions:
           - condition: trigger
             id: surplus_on
@@ -82,4 +94,3 @@ action:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
-
