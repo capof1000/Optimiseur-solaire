@@ -6,13 +6,15 @@ blueprint:
   input:
     net_consumption:
       name: Consommation nette (W)
+      description: Consommation nette globale du foyer, la valeur doit devenir negative lorsque l'on sur-produit de l'energie.
       selector:
         entity:
           domain: sensor
           device_class: power
 
     equipment_switch:
-      name: Équipement à contrôler
+      name: Équipement à piloter
+      description: Équipement à piloter
       selector:
         entity:
           domain:
@@ -21,6 +23,7 @@ blueprint:
 
     equipment_power:
       name: Puissance consommée par l’équipement (W)
+      description: Puissance instantanée consommée par l'equipement. Si vous n'avez pas pas d'appareil de mesure reelle, vous pouvez utiliser Powercal pour creer cette entité.
       selector:
         entity:
           domain: sensor
@@ -28,7 +31,7 @@ blueprint:
 
     offset:
       name: Offset à l'allumage (W)
-      description: Consommation nette inférieure à cette valeur pour allumer l'équipement. Si vous laissez a zero, l'appareil sera allumer des que la consommation deviendra negative. Si vous regler sur 100, l'appareil sera demarrera lorsque le surplus atteindra 100W.
+      description: Lorsque la consommation nette devient inférieure à cette valeur, l'équipement est allumé. Si vous laissez a zero, l'appareil sera allumer des que la consommation deviendra negative. Si vous regler sur 100, l'appareil sera demarrera lorsque le surplus atteindra 100W.
       default: 0
       selector:
         number:
@@ -96,4 +99,5 @@ action:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
+
 
