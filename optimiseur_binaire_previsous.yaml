@@ -1,0 +1,99 @@
+blueprint:
+  name: Optimisateur d'auto-consommation
+  description: Automation générique pour allumer/éteindre lorsque la consommation nette devient négative avec gestion d'offset
+  domain: automation
+
+  input:
+    net_consumption:
+      name: Consommation nette (W)
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+
+    equipment_switch:
+      name: Équipement à contrôler
+      selector:
+        entity:
+          domain:
+            - switch
+            - input_boolean
+
+    equipment_power:
+      name: Puissance consommée par l’équipement (W)
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+
+    offset:
+      name: Offset à l'allumage (W)
+      description: Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative).Entrez, -200 pour demarrer l'appareil lorsque la surproduction atteint 200W.
+      default: -50
+      selector:
+        number:
+          min: -1000
+          max: 0
+          step: 1
+          unit_of_measurement: "W"
+
+    delay_off:
+      name: Délai OFF (secondes)
+      description: Temps que la consommation nette doit rester supérieure à l'équipement pour éteindre
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 1
+          unit_of_measurement: "s"
+
+
+
+mode: restart
+
+trigger:
+  # Surproduction → ON immédiat si consommation nette inférieure ou égale à l'offset
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    below: !input offset
+    id: surplus_on
+
+  # Consommation > équipement → OFF après délai paramétrable
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    above: !input equipment_power
+    for:
+      seconds: !input delay_off
+    id: excess_off
+
+variables:
+  net_entity: !input net_consumption
+  equip_entity: !input equipment_power
+  switch_entity: !input equipment_switch
+  delay_off_sec: !input delay_off
+  offset_value: !input offset
+
+condition: []
+
+action:
+  - choose:
+
+      # 🔵 Allumer l'équipement si surproduction et consommation nette inférieure ou égale à l'offset
+      - conditions:
+          - condition: trigger
+            id: surplus_on
+        sequence:
+          - service: homeassistant.turn_on
+            target:
+              entity_id: "{{ switch_entity }}"
+
+      # 🔴 Éteindre si consommation nette > équipement et délai OFF
+      - conditions:
+          - condition: trigger
+            id: excess_off
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ switch_entity }}"
+
