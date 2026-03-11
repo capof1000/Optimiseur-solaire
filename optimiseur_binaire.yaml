@@ -45,7 +45,20 @@ blueprint:
           domain: sensor
           device_class: power
 
-    equipment_min_power:
+    StartupValue:
+      name: Valeur d'allumage (W)
+      description: >
+        Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative).
+        Entrez -200 pour démarrer l'appareil lorsque la surproduction atteint 200W.
+      default: -50
+      selector:
+        number:
+          min: -1000
+          max: 0
+          step: 1
+          unit_of_measurement: "W"
+
+    StopValue:
       name: Seuil de chauffe active (W)
       description: >
         Puissance minimale indiquant que l'équipement chauffe réellement.
@@ -57,19 +70,6 @@ blueprint:
           min: 10
           max: 500
           step: 10
-          unit_of_measurement: "W"
-
-    offset:
-      name: Valeur d'allumage (W)
-      description: >
-        Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative).
-        Entrez -200 pour démarrer l'appareil lorsque la surproduction atteint 200W.
-      default: -50
-      selector:
-        number:
-          min: -1000
-          max: 0
-          step: 1
           unit_of_measurement: "W"
 
     delay_off:
@@ -107,7 +107,7 @@ trigger:
   # Pas de délai : on profite du surplus immédiatement.
   - platform: numeric_state
     entity_id: !input net_consumption
-    below: !input offset
+    below: !input StartupValue
     id: surplus_on
 
   # ─── TRIGGER 2 : IMPORT RÉSEAU SOUTENU → EXTINCTION ─────────────
@@ -130,7 +130,7 @@ trigger:
   # Le "for: 30s" évite les faux positifs sur variation de capteur.
   - platform: numeric_state
     entity_id: !input equipment_power
-    above: !input equipment_min_power
+    above: !input StopValue
     for:
       seconds: 30
     id: thermostat_restart
