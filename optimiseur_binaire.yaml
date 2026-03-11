@@ -1,15 +1,15 @@
 blueprint:
-  name: Optimisateur d'auto-consommation v2
+  name: Optimisateur d'auto-consommation v3
   description: >
-    Allume/éteint un équipement selon le surplus solaire.
-    Réévalue à chaque changement de consommation nette OU de consommation
-    de l'équipement — corrige le bug du thermostat qui repart sans déclencher de transition.
+    Allume un équipement sur surplus solaire et l'éteint lors d'import réseau.
+    Correction du bug thermostat : détecte le redémarrage de chauffe même
+    sans transition sur la consommation nette.
   domain: automation
 
   input:
     net_consumption:
       name: Consommation nette (W)
-      description: Capteur de puissance nette (négatif = surplus solaire)
+      description: Négatif = surplus solaire, positif = import réseau
       selector:
         entity:
           domain: sensor
@@ -30,6 +30,20 @@ blueprint:
           domain: sensor
           device_class: power
 
+    equipment_min_power:
+      name: Seuil de chauffe active (W)
+      description: >
+        Puissance minimale indiquant que l'équipement chauffe réellement.
+        Permet de distinguer la veille (0W) de la chauffe active (ex: 2000W).
+        Recommandé : 10% de la puissance nominale de l'équipement.
+      default: 100
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 10
+          unit_of_measurement: "W"
+
     offset:
       name: Offset à l'allumage (W)
       description: >
@@ -46,8 +60,9 @@ blueprint:
     delay_off:
       name: Délai avant extinction (secondes)
       description: >
-        Durée pendant laquelle la condition d'extinction doit être vraie
-        avant d'éteindre l'équipement. Évite les coupures sur nuage passager.
+        Durée pendant laquelle la conso nette doit dépasser la puissance
+        de l'équipement avant de l'éteindre.
+        Protège contre les baisses passagères de production (nuage, pic ponctuel).
       default: 120
       selector:
         number:
@@ -56,50 +71,65 @@ blueprint:
           step: 1
           unit_of_measurement: "s"
 
-    trigger_threshold:
-      name: Seuil de variation pour déclencher (W)
-      description: >
-        Ignore les micro-variations de capteur inférieures à cette valeur.
-        Recommandé : 20-50 W pour éviter les déclenchements intempestifs.
-      default: 30
-      selector:
-        number:
-          min: 0
-          max: 200
-          step: 5
-          unit_of_measurement: "W"
-
-# mode single : si une évaluation est déjà en cours (ex: délai OFF),
-# on l'annule et on repart sur la nouvelle valeur mesurée
+# mode restart : si un nouveau trigger arrive pendant une action en cours,
+# on annule et on repart. C'est safe ici car tous les délais sont dans les
+# triggers (gérés nativement par HA), pas dans les actions.
 mode: restart
 
 trigger:
-  # Réévalue dès que la conso nette change significativement
-  - platform: state
-    entity_id: !input net_consumption
-    id: recheck
 
-  # Réévalue dès que l'équipement change de consommation
-  # (ex: thermostat qui repart → la logique détecte l'absence de solaire)
-  - platform: state
+  # ─── TRIGGER 1 : SURPLUS → ALLUMAGE ─────────────────────────────
+  # Se déclenche quand la conso nette franchit l'offset vers le bas.
+  # Exemple : offset = -200W, déclenche quand net_consumption passe
+  # en dessous de -200W (surproduction de 200W atteinte).
+  # Pas de délai : on profite du surplus immédiatement.
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    below: !input offset
+    id: surplus_on
+
+  # ─── TRIGGER 2 : IMPORT RÉSEAU SOUTENU → EXTINCTION ─────────────
+  # Se déclenche quand la conso nette dépasse la puissance de l'équipement
+  # pendant toute la durée du délai configuré.
+  # Logique : si net_consumption > equipment_power, le solaire ne couvre
+  # plus du tout l'équipement → inutile de le garder allumé.
+  # Le "for" est géré nativement par HA : résiste aux micro-fluctuations
+  # et n'est pas affecté par mode: restart.
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    above: !input equipment_power
+    for:
+      seconds: !input delay_off
+    id: grid_import_off
+
+  # ─── TRIGGER 3 : THERMOSTAT QUI REPART → VÉRIFICATION ───────────
+  # CORRECTION DU BUG : sans ce trigger, le scénario suivant passe
+  # inaperçu :
+  #   - Nuit  : chauffe-eau allumé dans HA, eau chaude, résistance en
+  #             veille (0W), net_consumption déjà positif → pas de
+  #             transition sur trigger 2
+  #   - 7h    : eau refroidie, thermostat remet la résistance en chauffe
+  #             (2000W), net_consumption monte mais sans franchir de seuil
+  #             → trigger 2 ne se déclenche pas non plus
+  #
+  # Ce trigger surveille l'équipement lui-même : dès que sa consommation
+  # repasse au dessus du seuil de chauffe active, on réévalue la situation.
+  # Le "for: 30s" évite les faux positifs sur une variation de capteur.
+  - platform: numeric_state
     entity_id: !input equipment_power
-    id: recheck
+    above: !input equipment_min_power
+    for:
+      seconds: 30
+    id: thermostat_restart
 
 variables:
   net_entity: !input net_consumption
   equip_entity: !input equipment_power
   switch_entity: !input equipment_switch
-  offset_value: !input offset
-  delay_off_sec: !input delay_off
-  threshold: !input trigger_threshold
-
-  # Valeurs courantes
-  net_power: "{{ states(net_entity) | float(0) }}"
-  equip_power: "{{ states(equip_entity) | float(0) }}"
-  switch_state: "{{ states(switch_entity) }}"
 
 condition:
-  # Ignore si les valeurs sont indisponibles
+  # Bloque l'automation si les capteurs sont indisponibles
+  # (coupure réseau, redémarrage HA, etc.)
   - condition: template
     value_template: >
       {{ states(net_entity) not in ['unknown', 'unavailable']
@@ -108,30 +138,54 @@ condition:
 action:
   - choose:
 
-      # ✅ CAS 1 — Surplus suffisant → allumer (si pas déjà allumé)
+      # ══════════════════════════════════════════════════════════════
+      # CAS 1 — SURPLUS SOLAIRE → ALLUMER
+      # ══════════════════════════════════════════════════════════════
       - conditions:
-          - condition: template
-            value_template: "{{ net_power <= offset_value }}"
-          - condition: template
-            value_template: "{{ switch_state == 'off' }}"
+          - condition: trigger
+            id: surplus_on
+          # Sécurité : évite un appel de service inutile si déjà allumé
+          - condition: state
+            entity_id: !input equipment_switch
+            state: "off"
         sequence:
           - service: homeassistant.turn_on
             target:
               entity_id: "{{ switch_entity }}"
 
-      # ⛔ CAS 2 — Pas assez de solaire → éteindre après délai (si allumé)
+      # ══════════════════════════════════════════════════════════════
+      # CAS 2 — IMPORT RÉSEAU SOUTENU → ÉTEINDRE
+      # Le délai a déjà été tenu dans le trigger, on éteint directement
+      # ══════════════════════════════════════════════════════════════
       - conditions:
-          - condition: template
-            value_template: "{{ net_power > offset_value | abs - threshold }}"
-          - condition: template
-            value_template: "{{ switch_state == 'on' }}"
+          - condition: trigger
+            id: grid_import_off
+          # Sécurité : évite un appel de service inutile si déjà éteint
+          - condition: state
+            entity_id: !input equipment_switch
+            state: "on"
         sequence:
-          - delay:
-              seconds: "{{ delay_off_sec }}"
-          # Réévalue une dernière fois après le délai
-          # (le surplus a peut-être repris entre temps)
-          - condition: template
-            value_template: "{{ states(net_entity) | float(0) > offset_value | abs - threshold }}"
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ switch_entity }}"
+
+      # ══════════════════════════════════════════════════════════════
+      # CAS 3 — THERMOSTAT REPART → ÉTEINDRE SI PAS DE SOLAIRE
+      # On vérifie l'état actuel de la conso nette au moment du
+      # redémarrage. Si pas de surplus → on éteint immédiatement.
+      # ══════════════════════════════════════════════════════════════
+      - conditions:
+          - condition: trigger
+            id: thermostat_restart
+          # L'équipement doit être allumé dans HA
+          - condition: state
+            entity_id: !input equipment_switch
+            state: "on"
+          # Pas de surplus au moment du redémarrage
+          - condition: numeric_state
+            entity_id: !input net_consumption
+            above: 0
+        sequence:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
