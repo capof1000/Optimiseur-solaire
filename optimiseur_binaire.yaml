@@ -1,9 +1,24 @@
 blueprint:
   name: Optimisateur d'auto-consommation v3
   description: >
-    Allume un équipement sur surplus solaire et l'éteint lors d'import réseau.
-    Correction du bug thermostat : détecte le redémarrage de chauffe même
-    sans transition sur la consommation nette.
+    Allume/éteint un équipement selon le surplus solaire.
+
+    v1 — Logique de base :
+      - Allumage immédiat sur surplus (net_consumption < offset)
+      - Extinction après délai si import réseau (net_consumption > equipment_power)
+
+    v2 — Tentative approche "trigger large + logique dans l'action" :
+      - Abandonné : délai OFF fragilisé par mode restart, trop de déclenchements
+
+    v3 — Hybride (version actuelle) :
+      - Conserve les triggers natifs HA de la v1 (robustesse du délai)
+      - Ajoute trigger sur equipment_power pour détecter le redémarrage
+        de thermostat sans transition sur net_consumption (correction du
+        bug chauffe-eau : résistance repart la nuit sans déclencher d'extinction)
+      - Ajoute max_net_consumption : seuil fixe indépendant pour qualifier
+        le redémarrage de thermostat sans solaire, sans affecter l'extinction
+        normale du trigger 2
+
   domain: automation
 
   input:
@@ -45,10 +60,10 @@ blueprint:
           unit_of_measurement: "W"
 
     offset:
-      name: Offset à l'allumage (W)
+      name: Valeur d'allumage (W)
       description: >
-        Seuil de surproduction pour allumer l'équipement.
-        Entrez -200 pour démarrer quand la surproduction atteint 200 W.
+        Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative).
+        Entrez -200 pour démarrer l'appareil lorsque la surproduction atteint 200W.
       default: -50
       selector:
         number:
@@ -60,9 +75,8 @@ blueprint:
     delay_off:
       name: Délai avant extinction (secondes)
       description: >
-        Durée pendant laquelle la conso nette doit dépasser la puissance
-        de l'équipement avant de l'éteindre.
-        Protège contre les baisses passagères de production (nuage, pic ponctuel).
+        Durée pendant laquelle net_consumption doit dépasser equipment_power
+        avant d'éteindre. Protège contre les baisses passagères (nuage, pic ponctuel).
       default: 120
       selector:
         number:
@@ -71,17 +85,25 @@ blueprint:
           step: 1
           unit_of_measurement: "s"
 
-# mode restart : si un nouveau trigger arrive pendant une action en cours,
-# on annule et on repart. C'est safe ici car tous les délais sont dans les
-# triggers (gérés nativement par HA), pas dans les actions.
+    max_net_consumption:
+      name: Valeur d'extinction (W)
+      description: Lorsque la consommation nette atteint cette valeur l'équipement sera éteint.
+      default: 100
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 10
+          unit_of_measurement: "W"
+
+# mode restart : safe ici car tous les délais sont dans les triggers
+# (gérés nativement par HA), pas dans les actions.
 mode: restart
 
 trigger:
 
   # ─── TRIGGER 1 : SURPLUS → ALLUMAGE ─────────────────────────────
-  # Se déclenche quand la conso nette franchit l'offset vers le bas.
-  # Exemple : offset = -200W, déclenche quand net_consumption passe
-  # en dessous de -200W (surproduction de 200W atteinte).
+  # Se déclenche quand net_consumption franchit la valeur d'allumage vers le bas.
   # Pas de délai : on profite du surplus immédiatement.
   - platform: numeric_state
     entity_id: !input net_consumption
@@ -89,12 +111,10 @@ trigger:
     id: surplus_on
 
   # ─── TRIGGER 2 : IMPORT RÉSEAU SOUTENU → EXTINCTION ─────────────
-  # Se déclenche quand la conso nette dépasse la puissance de l'équipement
-  # pendant toute la durée du délai configuré.
-  # Logique : si net_consumption > equipment_power, le solaire ne couvre
-  # plus du tout l'équipement → inutile de le garder allumé.
-  # Le "for" est géré nativement par HA : résiste aux micro-fluctuations
-  # et n'est pas affecté par mode: restart.
+  # Se déclenche quand net_consumption dépasse equipment_power pendant
+  # toute la durée du délai. Le solaire ne couvre plus du tout
+  # l'équipement → on l'éteint.
+  # Le "for" est géré nativement par HA : résiste aux micro-fluctuations.
   - platform: numeric_state
     entity_id: !input net_consumption
     above: !input equipment_power
@@ -103,18 +123,11 @@ trigger:
     id: grid_import_off
 
   # ─── TRIGGER 3 : THERMOSTAT QUI REPART → VÉRIFICATION ───────────
-  # CORRECTION DU BUG : sans ce trigger, le scénario suivant passe
-  # inaperçu :
-  #   - Nuit  : chauffe-eau allumé dans HA, eau chaude, résistance en
-  #             veille (0W), net_consumption déjà positif → pas de
-  #             transition sur trigger 2
-  #   - 7h    : eau refroidie, thermostat remet la résistance en chauffe
-  #             (2000W), net_consumption monte mais sans franchir de seuil
-  #             → trigger 2 ne se déclenche pas non plus
-  #
-  # Ce trigger surveille l'équipement lui-même : dès que sa consommation
-  # repasse au dessus du seuil de chauffe active, on réévalue la situation.
-  # Le "for: 30s" évite les faux positifs sur une variation de capteur.
+  # CORRECTION DU BUG : quand la résistance repart après une période
+  # de veille, net_consumption ne fait aucune transition (il était déjà
+  # au dessus de equipment_power) → trigger 2 ne se déclenche pas.
+  # On surveille donc l'équipement lui-même.
+  # Le "for: 30s" évite les faux positifs sur variation de capteur.
   - platform: numeric_state
     entity_id: !input equipment_power
     above: !input equipment_min_power
@@ -128,7 +141,7 @@ variables:
   switch_entity: !input equipment_switch
 
 condition:
-  # Bloque l'automation si les capteurs sont indisponibles
+  # Bloque si les capteurs sont indisponibles
   # (coupure réseau, redémarrage HA, etc.)
   - condition: template
     value_template: >
@@ -140,6 +153,7 @@ action:
 
       # ══════════════════════════════════════════════════════════════
       # CAS 1 — SURPLUS SOLAIRE → ALLUMER
+      # Déclenché par trigger 1 uniquement.
       # ══════════════════════════════════════════════════════════════
       - conditions:
           - condition: trigger
@@ -155,7 +169,8 @@ action:
 
       # ══════════════════════════════════════════════════════════════
       # CAS 2 — IMPORT RÉSEAU SOUTENU → ÉTEINDRE
-      # Le délai a déjà été tenu dans le trigger, on éteint directement
+      # Déclenché par trigger 2. Le délai a déjà été tenu dans le
+      # trigger, on éteint directement.
       # ══════════════════════════════════════════════════════════════
       - conditions:
           - condition: trigger
@@ -170,9 +185,15 @@ action:
               entity_id: "{{ switch_entity }}"
 
       # ══════════════════════════════════════════════════════════════
-      # CAS 3 — THERMOSTAT REPART → ÉTEINDRE SI PAS DE SOLAIRE
-      # On vérifie l'état actuel de la conso nette au moment du
-      # redémarrage. Si pas de surplus → on éteint immédiatement.
+      # CAS 3 — THERMOSTAT REPART SANS SOLAIRE → ÉTEINDRE
+      # Déclenché par trigger 3.
+      # On utilise max_net_consumption (seuil fixe) et non equipment_power
+      # pour éviter d'éteindre un équipement qui vient de démarrer en
+      # journée sur surplus solaire.
+      #
+      # Exemple :
+      #   Jour  : net=-500W < max_net(+100W) → condition fausse → ON maintenu ✅
+      #   Nuit  : net=+300W > max_net(+100W) → condition vraie  → OFF ✅
       # ══════════════════════════════════════════════════════════════
       - conditions:
           - condition: trigger
@@ -181,10 +202,10 @@ action:
           - condition: state
             entity_id: !input equipment_switch
             state: "on"
-          # Pas de surplus au moment du redémarrage
+          # Pas de solaire suffisant au moment du redémarrage
           - condition: numeric_state
             entity_id: !input net_consumption
-            above: 0
+            above: !input max_net_consumption
         sequence:
           - service: homeassistant.turn_off
             target:
