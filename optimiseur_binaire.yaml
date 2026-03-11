@@ -1,8 +1,8 @@
+
 blueprint:
   name: Optimisateur d'auto-consommation
   description: Automation générique pour allumer/éteindre lorsque la consommation nette devient négative avec gestion d'offset
   domain: automation
-
   input:
     net_consumption:
       name: Consommation nette (W)
@@ -10,7 +10,6 @@ blueprint:
         entity:
           domain: sensor
           device_class: power
-
     equipment_switch:
       name: Équipement à contrôler
       selector:
@@ -18,14 +17,12 @@ blueprint:
           domain:
             - switch
             - input_boolean
-
     equipment_power:
       name: Puissance consommée par l’équipement (W)
       selector:
         entity:
           domain: sensor
           device_class: power
-
     offset:
       name: Offset à l'allumage (W)
       description: Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative).Entrez, -200 pour demarrer l'appareil lorsque la surproduction atteint 200W.
@@ -36,7 +33,6 @@ blueprint:
           max: 0
           step: 1
           unit_of_measurement: "W"
-
     delay_off:
       name: Délai OFF (secondes)
       description: Temps que la consommation nette doit rester supérieure à l'équipement pour éteindre
@@ -47,18 +43,13 @@ blueprint:
           max: 3600
           step: 1
           unit_of_measurement: "s"
-
-
-
 mode: restart
-
 trigger:
   # Surproduction → ON immédiat si consommation nette inférieure ou égale à l'offset
   - platform: numeric_state
     entity_id: !input net_consumption
     below: !input offset
     id: surplus_on
-
   # Consommation > équipement → OFF après délai paramétrable
   - platform: numeric_state
     entity_id: !input net_consumption
@@ -66,19 +57,15 @@ trigger:
     for:
       seconds: !input delay_off
     id: excess_off
-
 variables:
   net_entity: !input net_consumption
   equip_entity: !input equipment_power
   switch_entity: !input equipment_switch
   delay_off_sec: !input delay_off
   offset_value: !input offset
-
 condition: []
-
 action:
   - choose:
-
       # 🔵 Allumer l'équipement si surproduction et consommation nette inférieure ou égale à l'offset
       - conditions:
           - condition: trigger
@@ -87,7 +74,6 @@ action:
           - service: homeassistant.turn_on
             target:
               entity_id: "{{ switch_entity }}"
-
       # 🔴 Éteindre si consommation nette > équipement et délai OFF
       - conditions:
           - condition: trigger
@@ -97,4 +83,180 @@ action:
             target:
               entity_id: "{{ switch_entity }}"
 
+Je souhaite que l'on travaille ensemble sur ce blueprint home assistant,  qui est actuellement fonctionnel mais necessite quelques ameliorations.
 
+-J'aimerais renommer "Offset à l'allumage (W)" en "Consigne de démarrage", la logique reste inchangée.
+
+-J'aimerais ajouter un nouveau champs d'entree, similaire a "Consigne de démarrage", appele "Consigne d'extinction" , avec pour description : "Eteind l’équipement lors que la consommation nette devient superieure à cette valeur.
+
+Ensuite il faut ajouter cette nouvelle logique dans le blue print pour gere l'extinction de l'equipement selon ce nouvau parametre.
+
+Show more
+19:07
+
+Thought for 14s
+Thought for 14s
+Voici le blueprint mis à jour avec les deux modifications :
+
+
+Created a file, read a file
+Created a file, read a file
+Voici le résumé des changements effectués :
+
+1. Renommage — Offset à l'allumage (W) → Consigne de démarrage, logique inchangée.
+
+2. Nouveau champ Consigne d'extinction
+
+Plage : -500 à 2000 W, défaut à 50 W
+Remplace equipment_power dans le trigger OFF — l'équipement s'éteint quand la consommation nette dépasse cette valeur pendant le délai configuré
+3. Trigger OFF mis à jour
+
+yaml
+# Avant
+above: !input equipment_power
+
+# Après
+above: !input extinction_offset
+La variable extinction_offset_value est aussi exposée dans le bloc variables pour une éventuelle utilisation future dans des conditions ou templates.
+
+⚠️ Note : equipment_power est conservé dans les inputs car il reste déclaré en variable — si tu n'en as plus besoin ailleurs dans le blueprint, tu peux le supprimer pour simplifier l'interface utilisateur.
+
+Optimisateur autoconsommation
+YAML 
+tu as bien compris qu'il s'agit d'une consigne d'extinction suplementaire ? les logiques d'extinction precedente doivent etre conserver!
+
+19:12
+
+Reconcilié logiques d'extinction existantes avec nouvelle condition supplémentaire
+Reconcilié logiques d'extinction existantes avec nouvelle condition supplémentaire
+Exact, j'ai remplacé l'ancienne logique au lieu de la compléter. Voici la correction :
+
+
+Created a file, ran a command, read a file
+Created a file, ran a command, read a file
+Cette fois les deux logiques d'extinction coexistent bien :
+
+excess_off — déclenche l'extinction quand la conso nette dépasse la puissance de l'équipement (logique originale conservée)
+extinction_off — déclenche l'extinction quand la conso nette dépasse la consigne d'extinction (nouvelle logique)
+Les deux triggers utilisent le même delay_off, et le premier qui se déclenche suffit à éteindre l'équipement (grâce au mode: restart).
+
+Optimisateur autoconsommation
+YAML 
+
+
+
+
+
+Claude is AI and can make mistakes. Please double-check responses.
+Optimisateur autoconsommation · YAML
+Copy
+
+blueprint:
+  name: Optimisateur d'auto-consommation
+  description: Automation générique pour allumer/éteindre lorsque la consommation nette devient négative avec gestion d'offset
+  domain: automation
+  input:
+    net_consumption:
+      name: Consommation nette (W)
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+    equipment_switch:
+      name: Équipement à contrôler
+      selector:
+        entity:
+          domain:
+            - switch
+            - input_boolean
+    equipment_power:
+      name: Puissance consommée par l'équipement (W)
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+    offset:
+      name: Consigne de démarrage
+      description: Consommation nette inférieure à cette valeur pour allumer l'équipement (valeur négative). Entrez -200 pour démarrer l'appareil lorsque la surproduction atteint 200W.
+      default: -50
+      selector:
+        number:
+          min: -1000
+          max: 0
+          step: 1
+          unit_of_measurement: "W"
+    extinction_offset:
+      name: Consigne d'extinction
+      description: Éteint l'équipement lorsque la consommation nette devient supérieure à cette valeur.
+      default: 50
+      selector:
+        number:
+          min: -500
+          max: 2000
+          step: 1
+          unit_of_measurement: "W"
+    delay_off:
+      name: Délai OFF (secondes)
+      description: Temps que la consommation nette doit rester supérieure à l'équipement pour éteindre
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 1
+          unit_of_measurement: "s"
+mode: restart
+trigger:
+  # Surproduction → ON immédiat si consommation nette inférieure ou égale à la consigne de démarrage
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    below: !input offset
+    id: surplus_on
+  # Consommation > équipement → OFF après délai paramétrable (logique originale)
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    above: !input equipment_power
+    for:
+      seconds: !input delay_off
+    id: excess_off
+  # Consommation > consigne d'extinction → OFF après délai paramétrable (nouvelle logique)
+  - platform: numeric_state
+    entity_id: !input net_consumption
+    above: !input extinction_offset
+    for:
+      seconds: !input delay_off
+    id: extinction_off
+variables:
+  net_entity: !input net_consumption
+  equip_entity: !input equipment_power
+  switch_entity: !input equipment_switch
+  delay_off_sec: !input delay_off
+  offset_value: !input offset
+  extinction_offset_value: !input extinction_offset
+condition: []
+action:
+  - choose:
+      # 🔵 Allumer l'équipement si surproduction et consommation nette inférieure ou égale à la consigne de démarrage
+      - conditions:
+          - condition: trigger
+            id: surplus_on
+        sequence:
+          - service: homeassistant.turn_on
+            target:
+              entity_id: "{{ switch_entity }}"
+      # 🔴 Éteindre si consommation nette > puissance équipement et délai OFF écoulé (logique originale)
+      - conditions:
+          - condition: trigger
+            id: excess_off
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ switch_entity }}"
+      # 🔴 Éteindre si consommation nette > consigne d'extinction et délai OFF écoulé (nouvelle logique)
+      - conditions:
+          - condition: trigger
+            id: extinction_off
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ switch_entity }}"
