@@ -1,5 +1,5 @@
 blueprint:
-  name: Optimisateur d'auto-consommation v3.2
+  name: Optimisateur d'auto-consommation v3.3
   description: >
     Allume/éteint un équipement selon le surplus solaire.
 
@@ -18,9 +18,15 @@ blueprint:
       - StopValue : seuil dédié au CAS 3 (redémarrage thermostat sans solaire)
       - Délai après allumage (CAS 1) pour éviter les cycles rapides
       - Chaque seuil a un rôle unique :
-          StartupValue  → déclenchement allumage
-          equipment_power → déclenchement extinction normale
-          StopValue     → déclenchement extinction sur redémarrage thermostat
+          StartupValue    → déclenchement allumage
+          equipment_power → capteur uniquement, détection redémarrage thermostat
+          StopValue       → déclenchement extinction (CAS 2 et CAS 3)
+
+    v3.3 :
+      - Suppression du trigger sur equipment_power
+      - Trigger 3 : extinction si net_consumption > StopValue avec délai
+        et vérification que l'équipement est allumé
+      - Action avant délai : on agit d'abord, puis on attend
 
   domain: automation
 
@@ -43,12 +49,7 @@ blueprint:
 
     equipment_power:
       name: Puissance consommée par l'équipement (W)
-      description: >
-        Capteur de puissance de l'équipement.
-        Utilisé pour détecter le redémarrage du thermostat (trigger 3)
-        et comme seuil d'extinction normale (trigger 2) :
-        si net_consumption dépasse cette valeur, le solaire ne couvre
-        plus du tout l'équipement.
+      description: Capteur de puissance de l'équipement. Utilisé uniquement pour la détection.
       selector:
         entity:
           domain: sensor
@@ -70,10 +71,8 @@ blueprint:
     StopValue:
       name: Valeur d'extinction (W)
       description: >
-        Seuil utilisé uniquement pour le CAS 3 (redémarrage thermostat).
-        Si net_consumption dépasse cette valeur au moment du redémarrage,
-        l'équipement est éteint immédiatement.
-        Exemple : +100W signifie "pas de solaire utile disponible".
+        Lorsque la consommation nette dépasse cette valeur,
+        l'équipement sera éteint.
       default: 100
       selector:
         number:
@@ -98,7 +97,7 @@ blueprint:
     delay_off:
       name: Délai avant extinction (secondes)
       description: >
-        Durée pendant laquelle net_consumption doit dépasser equipment_power
+        Durée pendant laquelle la condition d'extinction doit être vraie
         avant d'éteindre. Protège contre les baisses passagères (nuage, pic ponctuel).
       default: 120
       selector:
@@ -110,8 +109,8 @@ blueprint:
 
 # mode restart : safe ici car tous les délais sont dans les triggers
 # (gérés nativement par HA), pas dans les actions.
-# Exception : le délai après allumage (CAS 1) est dans l'action,
-# mais il est volontairement court et non critique.
+# Exception : les délais post-action (CAS 1, 2, 3) sont dans l'action
+# mais sont volontaires : ils empêchent un nouveau cycle trop rapide.
 mode: restart
 
 trigger:
@@ -136,19 +135,18 @@ trigger:
       seconds: !input delay_off
     id: grid_import_off
 
-  # ─── TRIGGER 3 : THERMOSTAT QUI REPART → VÉRIFICATION ───────────
-  # CORRECTION DU BUG : quand la résistance repart après une période
-  # de veille, net_consumption ne fait aucune transition → trigger 2
-  # ne se déclenche pas.
-  # On surveille donc l'équipement lui-même : dès que sa consommation
-  # remonte au dessus de 0, on réévalue la situation.
-  # Le "for: 30s" évite les faux positifs sur variation de capteur.
+  # ─── TRIGGER 3 : CONSOMMATION NETTE > STOPVALUE → EXTINCTION ─────
+  # Se déclenche quand net_consumption dépasse StopValue pendant toute
+  # la durée du délai configuré.
+  # Corrige le bug thermostat : si net_consumption était déjà au dessus
+  # de StopValue avant le redémarrage, ce trigger couvre ce cas
+  # dès que l'équipement est confirmé allumé.
   - platform: numeric_state
-    entity_id: !input equipment_power
-    above: 0
+    entity_id: !input net_consumption
+    above: !input StopValue
     for:
-      seconds: 30
-    id: thermostat_restart
+      seconds: !input delay_off
+    id: stop_value_off
 
 variables:
   net_entity: !input net_consumption
@@ -167,11 +165,9 @@ action:
   - choose:
 
       # ══════════════════════════════════════════════════════════════
-      # CAS 1 — SURPLUS SOLAIRE → ALLUMER
-      # Déclenché par trigger 1 uniquement.
-      # Délai après allumage pour éviter un cycle trop rapide :
-      # lorsque l'équipement démarre, sa consommation s'ajoute à la
-      # conso nette et pourrait immédiatement déclencher une extinction.
+      # CAS 1 — SURPLUS SOLAIRE → ALLUMER puis attendre
+      # On allume d'abord, puis on applique le délai pour laisser
+      # la consommation se stabiliser et éviter un cycle trop rapide.
       # ══════════════════════════════════════════════════════════════
       - conditions:
           - condition: trigger
@@ -184,15 +180,13 @@ action:
           - service: homeassistant.turn_on
             target:
               entity_id: "{{ switch_entity }}"
-          # Pause pour laisser la consommation se stabiliser
-          # avant d'autoriser un nouveau cycle
           - delay:
               seconds: !input delay_on
 
       # ══════════════════════════════════════════════════════════════
-      # CAS 2 — IMPORT RÉSEAU SOUTENU → ÉTEINDRE
-      # Déclenché par trigger 2. Le délai a déjà été tenu dans le
-      # trigger, on éteint directement.
+      # CAS 2 — IMPORT RÉSEAU SOUTENU → ÉTEINDRE puis attendre
+      # On éteint d'abord, puis on applique le délai pour éviter
+      # un rallumage immédiat.
       # ══════════════════════════════════════════════════════════════
       - conditions:
           - condition: trigger
@@ -205,30 +199,24 @@ action:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
+          - delay:
+              seconds: !input delay_off
 
       # ══════════════════════════════════════════════════════════════
-      # CAS 3 — THERMOSTAT REPART SANS SOLAIRE → ÉTEINDRE
-      # Déclenché par trigger 3.
-      # On utilise StopValue comme seuil de décision, indépendant de
-      # equipment_power, pour ne pas éteindre un équipement qui vient
-      # de démarrer en journée sur surplus solaire.
-      #
-      # Exemple :
-      #   Jour  : net=-500W < StopValue(+100W) → condition fausse → ON maintenu ✅
-      #   Nuit  : net=+300W > StopValue(+100W) → condition vraie  → OFF ✅
+      # CAS 3 — CONSOMMATION NETTE > STOPVALUE → ÉTEINDRE puis attendre
+      # On éteint d'abord, puis on applique le délai pour éviter
+      # un rallumage immédiat.
       # ══════════════════════════════════════════════════════════════
       - conditions:
           - condition: trigger
-            id: thermostat_restart
-          # L'équipement doit être allumé dans HA
+            id: stop_value_off
+          # Vérification que l'équipement est allumé
           - condition: state
             entity_id: !input equipment_switch
             state: "on"
-          # net_consumption dépasse StopValue → pas de solaire suffisant
-          - condition: numeric_state
-            entity_id: !input net_consumption
-            above: !input StopValue
         sequence:
           - service: homeassistant.turn_off
             target:
               entity_id: "{{ switch_entity }}"
+          - delay:
+              seconds: !input delay_off
