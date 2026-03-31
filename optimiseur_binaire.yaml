@@ -26,6 +26,7 @@ blueprint:
       - Suppression du trigger sur equipment_power
       - Trigger 3 : extinction si net_consumption > StopValue avec délai
         et vérification que l'équipement est allumé
+      - mode single
       - Action avant délai : on agit d'abord, puis on attend
 
   domain: automation
@@ -111,7 +112,7 @@ blueprint:
 # (gérés nativement par HA), pas dans les actions.
 # Exception : les délais post-action (CAS 1, 2, 3) sont dans l'action
 # mais sont volontaires : ils empêchent un nouveau cycle trop rapide.
-mode: restart
+mode: single
 
 trigger:
 
